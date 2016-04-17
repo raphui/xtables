@@ -79,7 +79,7 @@ static void xtables_set_table(uint64_t *pt, uint64_t *table_addr)
 {
 	uint64_t val;
 
-	val = (uint64_t)table_addr | PMD_TYPE_TABLE;
+	val = PMD_TYPE_TABLE | (uint64_t)table_addr;
 	*pt = val;
 }
 
@@ -145,7 +145,7 @@ static void xtables_map_region(uint64_t *pgd, uint64_t base, uint64_t size, uint
 			block_size = (1 << level2shift(level));
 
 			if (size >= block_size && !(base & (block_size - 1))) {
-				printf("entry: %x\n", entry);
+				printf("entry: %llx\n", entry);
 				virt = entry;
 				*entry = base | attr;
 				base += block_size;
@@ -185,10 +185,10 @@ static int xtables_init(int size)
 
 	pgd = xtables_create_table(pgd);
 
-	xtables_map_region(pgd, TEST_START_RANGE, TEST_SIZE, 0);
+	xtables_map_region(pgd, TEST_START_RANGE, TEST_SIZE, PMD_TYPE_SECT | PMD_SECT_AF);
 
 
-	printf("virt: %x, phys: %x\n", virt, xtables_virt_to_phys(pgd, virt));
+	printf("virt: %llx, phys: %llx\n", virt, xtables_virt_to_phys(pgd, virt));
 
 	munmap(pgd, TLB_TABLE_SIZE);
 
