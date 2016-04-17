@@ -23,19 +23,53 @@
 #include <string.h>
 #include <stdint.h>
 
+#include "mmu.h"
+
 #define NUM_ENTRIES	512
 #define TLB_TABLE_SIZE  0x1000
 
 #define START_RANGE	0x400000000
 #define END_RANGE	0x500000000
 
-#define L0_SHIFT	39
-#define L1_SHIFT	30
-#define L2_SHIFT	21
+#define BLOCK_SHIFT_L0	39
+#define BLOCK_SHIFT_L1	30
+#define BLOCK_SHIFT_L2T	21
+
+#define BLOCK_SIZE_L0	0x8000000000
+#define BLOCK_SIZE_L1   0x40000000
+#define BLOCK_SIZE_L2   0x200000
 
 static uint64_t *pgd;
 static uint64_t *pmd;
 static uint64_t *pte;
+
+void xtables_set_section(uint64_t *pt, int index, uint64_t section, uint64_t memory_type, uint64_t share)
+{
+        uint64_t val;
+
+        val = section | PMD_TYPE_SECT | PMD_SECT_AF;
+        val |= PMD_ATTRINDX(memory_type);
+        val |= share;
+        pt[index] = val;
+}
+
+void xtables_set_table(uint64_t *pt, int index, uint64_t *table_addr)
+{
+	uint64_t val;
+
+	val = (uint64_t)table_addr | PMD_TYPE_TABLE;
+	pt[index] = val;
+}
+
+uint64_t xtables_find_table(uint64_t *pgd, uint64_t virt, uint64_t phys, uint64_t size)
+{
+	uint64_t table = -EINVAL;
+	uint64_t table_base = 0;
+	int level = 0;
+
+
+	return table;
+}
 
 int xtables_init(int size)
 {
@@ -62,6 +96,9 @@ int xtables_init(int size)
 	memset(pgd, 0, TLB_TABLE_SIZE);
 	memset(pmd, 0, TLB_TABLE_SIZE);
 	memset(pte, 0, TLB_TABLE_SIZE);
+
+	xtables_set_table(pgd, 0, pmd);
+	xtables_set_table(pmd, 0, pte);
 
 	return 0;
 }
