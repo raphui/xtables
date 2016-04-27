@@ -153,6 +153,13 @@ static void xtables_map_region(uint64_t *pgd, uint64_t base, uint64_t size, uint
 	}
 }
 
+static uint64_t xtables_virt_to_phys(uint64_t *pgd, uint64_t virt)
+{
+	uint64_t entry_lvl1 = xtables_find_entry(pgd, virt, 1);
+	uint64_t entry_lvl2 = xtables_find_entry(pgd, virt, 2);
+	uint64_t entry_lvl3 = xtables_find_entry(pgd, virt, 3);
+}
+
 static int xtables_init(int size)
 {
 	int i;
