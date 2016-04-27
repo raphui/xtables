@@ -22,12 +22,15 @@
 #include <errno.h>
 #include <string.h>
 #include <stdint.h>
+#include <fcntl.h>
+#include <sys/mman.h>
 
 #include "mmu.h"
 
 #define MAX_ENTRIES	512
-#define TLB_TABLE_SIZE  0x1000
+#define TLB_TABLE_SIZE  0x40000000
 
+#define TEST_FILENAME		"va_mem"
 #define TEST_START_RANGE	0x400000000
 #define TEST_END_RANGE		0x500000000
 #define TEST_ATTR		MEMORY_ATTRIBUTES(MT_NORMAL)
@@ -46,6 +49,8 @@
 static uint64_t *pgd;
 static uint64_t *pmd;
 static uint64_t *pte;
+
+static int fd;
 
 static int level2shift(int level)
 {
@@ -90,13 +95,13 @@ static uint64_t *xtables_create_table(uint64_t *pgd)
 	return new_table;
 }
 
-static uint64_t *xtables_find_entry(uint64_t pgd, uint64_t addr, int level)
+static uint64_t *xtables_find_entry(uint64_t *pgd, uint64_t addr, int level)
 {
 	uint64_t *entry = pgd;
 	uint64_t block_shift;
 	int i;
 
-	for (i = 1; i < 4; i++) {
+	for (i = 0; i < 4; i++) {
 		block_shift = level2shift(i);
 		entry += (addr >> block_shift) & 0x1FF;
 
@@ -124,6 +129,10 @@ static void xtables_map_region(uint64_t *pgd, uint64_t base, uint64_t size, uint
 
 	while (size) {
 		entry = xtables_find_entry(pgd, base, 0);
+		if (entry && (entry_type(entry) == PMD_TYPE_FAULT)) {
+			table = xtables_create_table(pgd);
+			xtables_set_table(entry, table);
+		}
 
 		for (level = 1; level < 4; level++) {
 			entry = xtables_find_entry(pgd, base, level);
@@ -135,7 +144,7 @@ static void xtables_map_region(uint64_t *pgd, uint64_t base, uint64_t size, uint
 				size -= block_size;
 				break;
 
-			} else if (entry_type(entry) & PMD_TYPE_FAULT) {
+			} else if (entry_type(entry) == PMD_TYPE_FAULT) {
 				table = xtables_create_table(pgd);
 				xtables_set_table(entry, table);
 			}
@@ -148,8 +157,8 @@ static int xtables_init(int size)
 {
 	int i;
 
-	pgd = malloc(TLB_TABLE_SIZE);
-	if (!pgd) {
+	pgd = mmap(NULL, TLB_TABLE_SIZE, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (pgd < 0) {
 		printf("cannot allocate pgd\n");
 		return -ENOMEM;
 	}
@@ -177,6 +186,8 @@ static int xtables_init(int size)
 //	xtables_set_table(pgd, 0, pmd);
 //	xtables_set_table(pmd, 0, pte);
 
+	munmap(pgd, TLB_TABLE_SIZE);
+
 	return 0;
 }
 
@@ -184,9 +195,16 @@ int main(int argc, char **argv)
 {
 	int ret = 0;
 
+	fd = open(TEST_FILENAME, O_RDWR);
+	if (fd < 0)
+		return ret;
+
 	ret = xtables_init(TEST_SIZE);
 	if (ret < 0)
 		return ret;
+
+
+	close(fd);
 
 	return ret;
 }
