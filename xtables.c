@@ -166,25 +166,6 @@ static int xtables_init(int size)
 	pgd = xtables_create_table(pgd);
 
 	xtables_map_region(pgd, TEST_START_RANGE, TEST_SIZE, 0);
-//
-//	pmd = malloc(TLB_TABLE_SIZE);
-//	if (!pmd) {
-//		printf("cannot allocate pmd\n");
-//		return -ENOMEM;
-//	}
-//
-//	pte = malloc(TLB_TABLE_SIZE);
-//	if (!pte) {
-//		printf("cannot allocate pte\n");
-//		return -ENOMEM;
-//	}
-//
-//	memset(pgd, 0, TLB_TABLE_SIZE);
-//	memset(pmd, 0, TLB_TABLE_SIZE);
-//	memset(pte, 0, TLB_TABLE_SIZE);
-//
-//	xtables_set_table(pgd, 0, pmd);
-//	xtables_set_table(pmd, 0, pte);
 
 	munmap(pgd, TLB_TABLE_SIZE);
 
