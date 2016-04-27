@@ -34,16 +34,29 @@
 #define BLOCK_SHIFT_L0	39
 #define BLOCK_SHIFT_L1	30
 #define BLOCK_SHIFT_L2	21
+#define BLOCK_SHIFT_L3	12
 
 #define BLOCK_SIZE_L0	0x8000000000
 #define BLOCK_SIZE_L1   0x40000000
 #define BLOCK_SIZE_L2   0x200000
+#define BLOCK_SIZE_L3   0x1000
 
 static uint64_t *pgd;
 static uint64_t *pmd;
 static uint64_t *pte;
 
-void xtables_set_section(uint64_t *pt, int index, uint64_t section, uint64_t memory_type, uint64_t share)
+static int level2shift(int level)
+{
+	/* Page is 12 bits wide, every level translates 9 bits */
+	return (12 + 9 * (3 - level));
+}
+
+static int entry_type(uint64_t *entry)
+{
+	return *entry & PMD_TYPE_MASK;
+}
+
+static void xtables_set_section(uint64_t *pt, int index, uint64_t section, uint64_t memory_type, uint64_t share)
 {
         uint64_t val;
 
@@ -53,7 +66,7 @@ void xtables_set_section(uint64_t *pt, int index, uint64_t section, uint64_t mem
         pt[index] = val;
 }
 
-void xtables_set_table(uint64_t *pt, int index, uint64_t *table_addr)
+static void xtables_set_table(uint64_t *pt, int index, uint64_t *table_addr)
 {
 	uint64_t val;
 
@@ -61,17 +74,55 @@ void xtables_set_table(uint64_t *pt, int index, uint64_t *table_addr)
 	pt[index] = val;
 }
 
-uint64_t xtables_find_table(uint64_t *pgd, uint64_t virt, uint64_t phys, uint64_t size)
+static uint64_t *xtables_find_entry(uint64_t pgd, uint64_t addr, int level)
 {
-	uint64_t table = -EINVAL;
-	uint64_t table_base = 0;
-	int level = 0;
+	uint64_t *entry = pgd;
+	uint64_t block_shift;
+	int i;
+
+	for (i = 1; i < 4; i++) {
+		block_shift = level2shift(i);
+		entry += (addr >> block_shift) & 0x1FF;
+
+		if (i == level)
+			break;
+
+		if (entry_type(entry) & PMD_TYPE_FAULT) {
+			entry = NULL;
+			break;
+		}
+		else
+			entry = (uint64_t *)(*entry & 0x0000fffffffff000ULL);	
+	}
 
 
-	return table;
+	return entry;
 }
 
-int xtables_init(int size)
+static void xtables_map_region(uint64_t pgd, uint64_t base, uint64_t size, uint64_t attr)
+{
+	uint64_t block_size;
+	uint64_t *entry;
+	uint64_t *table;
+	int level;
+
+	while (size) {
+		entry = xtables_find_entry(pgd, base, 0);
+
+		for (level = 1; level < 4; level++) {
+			entry = xtables_find_entry(pgd, base, level);
+			block_size = (1 << level2shift(level));
+
+			*entry = base | attr;
+			base += block_size;
+			size -= block_size;
+			break;
+		}
+
+	}
+}
+
+static int xtables_init(int size)
 {
 	int i;
 
