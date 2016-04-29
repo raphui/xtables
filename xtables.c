@@ -50,6 +50,8 @@ static uint64_t *pgd;
 static uint64_t *pmd;
 static uint64_t *pte;
 
+static uint64_t virt;
+
 static int fd;
 
 static int level2shift(int level)
@@ -139,6 +141,8 @@ static void xtables_map_region(uint64_t *pgd, uint64_t base, uint64_t size, uint
 			block_size = (1 << level2shift(level));
 
 			if (size >= block_size && !(base & (block_size - 1))) {
+				printf("entry: %x\n", entry);
+				virt = entry;
 				*entry = base | attr;
 				base += block_size;
 				size -= block_size;
@@ -155,9 +159,14 @@ static void xtables_map_region(uint64_t *pgd, uint64_t base, uint64_t size, uint
 
 static uint64_t xtables_virt_to_phys(uint64_t *pgd, uint64_t virt)
 {
-	uint64_t entry_lvl1 = xtables_find_entry(pgd, virt, 1);
-	uint64_t entry_lvl2 = xtables_find_entry(pgd, virt, 2);
+	uint64_t phys = virt & 0xFFF;
 	uint64_t entry_lvl3 = xtables_find_entry(pgd, virt, 3);
+
+	entry_lvl3 << 11;
+
+	phys |= entry_lvl3;
+
+	return phys;
 }
 
 static int xtables_init(int size)
@@ -173,6 +182,9 @@ static int xtables_init(int size)
 	pgd = xtables_create_table(pgd);
 
 	xtables_map_region(pgd, TEST_START_RANGE, TEST_SIZE, 0);
+
+
+	printf("virt: %x, phys: %x\n", virt, xtables_virt_to_phys(pgd, virt));
 
 	munmap(pgd, TLB_TABLE_SIZE);
 
