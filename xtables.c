@@ -102,15 +102,19 @@ static uint64_t *xtables_find_entry(uint64_t *pgd, uint64_t addr, int level)
 	uint64_t *entry = pgd;
 	uint64_t block_shift;
 	int i;
+	int idx;
 
 	for (i = 0; i < 4; i++) {
 		block_shift = level2shift(i);
-		entry += (addr >> block_shift) & 0x1FF;
+		idx = (addr >> block_shift) & 0x1FF;
+		entry += idx;
+
+		printf("idx=%llx PTE %p at level %d: %llx\n", idx, entry, i, *entry);
 
 		if (i == level)
 			break;
 
-		if (entry_type(entry) & PMD_TYPE_FAULT) {
+		if (entry_type(entry) != PMD_TYPE_TABLE) {
 			entry = NULL;
 			break;
 		}
