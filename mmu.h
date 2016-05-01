@@ -1,41 +1,36 @@
-/*
- * (C) Copyright 2013
- * David Feng <fenghua@phytium.com.cn>
- *
- * SPDX-License-Identifier:	GPL-2.0+
- */
-
-#ifndef _ASM_ARMV8_MMU_H_
-#define _ASM_ARMV8_MMU_H_
-
-#ifdef __ASSEMBLY__
-#define _AC(X, Y)	X
-#else
-#define _AC(X, Y)	(X##Y)
-#endif
+#ifndef __ARM_MMU_H
+#define __ARM_MMU_H
 
 #define UL(x)		_AC(x, UL)
 
-/***************************************************************/
-/*
- * The following definitions are related each other, shoud be
- * calculated specifically.
- */
-#define VA_BITS			(39)	/* 42 bits virtual address */
+#define UNUSED_DESC                0x6EbAAD0BBADbA6E0
 
-/* PAGE_SHIFT determines the page size */
-#undef  PAGE_SIZE
-#define PAGE_SHIFT		16
-#define PAGE_SIZE		(1 << PAGE_SHIFT)
-#define PAGE_MASK		(~(PAGE_SIZE-1))
+#define VA_START                   0x0
+#define BITS_PER_VA                33
 
-/*
- * section address mask and size definitions.
- */
-#define SECTION_SHIFT		29
-#define SECTION_SIZE		(UL(1) << SECTION_SHIFT)
-#define SECTION_MASK		(~(SECTION_SIZE-1))
-/***************************************************************/
+/* Granule size of 4KB is being used */
+#define GRANULE_SIZE_SHIFT         12
+#define GRANULE_SIZE               (1 << GRANULE_SIZE_SHIFT)
+#define XLAT_ADDR_MASK             ((1UL << BITS_PER_VA) - GRANULE_SIZE)
+#define GRANULE_SIZE_MASK          ((1 << GRANULE_SIZE_SHIFT) - 1)
+
+#define BITS_RESOLVED_PER_LVL   (GRANULE_SIZE_SHIFT - 3)
+#define L1_ADDR_SHIFT           (GRANULE_SIZE_SHIFT + BITS_RESOLVED_PER_LVL * 2)
+#define L2_ADDR_SHIFT           (GRANULE_SIZE_SHIFT + BITS_RESOLVED_PER_LVL * 1)
+#define L3_ADDR_SHIFT           (GRANULE_SIZE_SHIFT + BITS_RESOLVED_PER_LVL * 0)
+
+
+#define L1_ADDR_MASK     (((1UL << BITS_RESOLVED_PER_LVL) - 1) << L1_ADDR_SHIFT)
+#define L2_ADDR_MASK     (((1UL << BITS_RESOLVED_PER_LVL) - 1) << L2_ADDR_SHIFT)
+#define L3_ADDR_MASK     (((1UL << BITS_RESOLVED_PER_LVL) - 1) << L3_ADDR_SHIFT)
+
+/* These macros give the size of the region addressed by each entry of a xlat
+   table at any given level */
+#define L3_XLAT_SIZE               (1UL << L3_ADDR_SHIFT)
+#define L2_XLAT_SIZE               (1UL << L2_ADDR_SHIFT)
+#define L1_XLAT_SIZE               (1UL << L1_ADDR_SHIFT)
+
+#define GRANULE_MASK	GRANULE_SIZE
 
 /*
  * Memory types
@@ -47,10 +42,10 @@
 #define MT_NORMAL		4
 
 #define MEMORY_ATTRIBUTES	((0x00 << (MT_DEVICE_NGNRNE*8)) |	\
-				(0x04 << (MT_DEVICE_NGNRE*8)) |		\
-				(0x0c << (MT_DEVICE_GRE*8)) |		\
-				(0x44 << (MT_NORMAL_NC*8)) |		\
-				(UL(0xff) << (MT_NORMAL*8)))
+		(0x04 << (MT_DEVICE_NGNRE*8)) |		\
+		(0x0c << (MT_DEVICE_GRE*8)) |		\
+		(0x44 << (MT_NORMAL_NC*8)) |		\
+		(UL(0xff) << (MT_NORMAL*8)))
 
 /*
  * Hardware page table definitions.
@@ -60,8 +55,8 @@
 #define PMD_TYPE_MASK		(3 << 0)
 #define PMD_TYPE_FAULT		(0 << 0)
 #define PMD_TYPE_TABLE		(3 << 0)
+#define PMD_TYPE_PAGE		(3 << 0)
 #define PMD_TYPE_SECT		(1 << 0)
-#define PMD_TYPE_PAGE		(1 << 0)
 
 /*
  * Section
@@ -104,16 +99,20 @@
 #define TCR_EL2_IPS_BITS	(3 << 16)	/* 42 bits physical address */
 #define TCR_EL3_IPS_BITS	(3 << 16)	/* 42 bits physical address */
 
-/* PTWs cacheable, inner/outer WBWA and inner shareable */
-#define TCR_FLAGS		(TCR_TG0_64K |		\
-				TCR_SHARED_INNER |	\
-				TCR_ORGN_WBWA |		\
-				TCR_IRGN_WBWA |		\
-				TCR_T0SZ(VA_BITS))
-
 #define TCR_EL1_RSVD		(1 << 31)
 #define TCR_EL2_RSVD		(1 << 31 | 1 << 23)
 #define TCR_EL3_RSVD		(1 << 31 | 1 << 23)
+
+#define TCR_FLAGS		(TCR_TG0_4K | \
+		TCR_SHARED_OUTER | \
+		TCR_SHARED_INNER | \
+		TCR_IRGN_WBWA | \
+		TCR_ORGN_WBWA | \
+		TCR_T0SZ(BITS_PER_VA))
+
+#define MEMORY_ATTR     (PMD_SECT_AF | PMD_SECT_INNER_SHARE |    \
+		PMD_ATTRINDX(MT_NORMAL) |       \
+		PMD_TYPE_SECT)
 
 #ifndef __ASSEMBLY__
 
@@ -133,9 +132,38 @@ static inline void set_ttbr_tcr_mair(int el, uint64_t table, uint64_t tcr, uint6
 		asm volatile("msr tcr_el3, %0" : : "r" (tcr) : "memory");
 		asm volatile("msr mair_el3, %0" : : "r" (attr) : "memory");
 	} else {
-		hang();
+		return;
 	}
 	asm volatile("isb");
 }
+
+static inline uint64_t get_ttbr(int el)
+{
+	uint64_t val;
+	if (el == 1) {
+		asm volatile("mrs %0, ttbr0_el1" : "=r" (val));
+	} else if (el == 2) {
+		asm volatile("mrs %0, ttbr0_el2" : "=r" (val));
+	} else if (el == 3) {
+		asm volatile("mrs %0, ttbr0_el3" : "=r" (val));
+	} else {
+		return -EINVAL;
+	}
+
+	return val;
+}
 #endif
-#endif /* _ASM_ARMV8_MMU_H_ */
+
+#ifdef CONFIG_MMU
+void __mmu_cache_on(void);
+void __mmu_cache_off(void);
+void __mmu_cache_flush(void);
+#else
+static inline void __mmu_cache_on(void) {}
+static inline void __mmu_cache_off(void) {}
+static inline void __mmu_cache_flush(void) {}
+#endif
+
+void mmu_early_enable(uint64_t membase, uint64_t memsize, uint64_t _ttb);
+
+#endif /* __ARM_MMU_H */
