@@ -175,8 +175,7 @@ static void xtables_map_region(uint64_t *pgd, uint64_t base, uint64_t size, uint
 
 			if (size >= block_size && IS_ALIGNED(base, block_size)) {
 				entry = table + idx;
-				if (level == 3)
-					virt = entry;
+				printf("base at %llx pte at %llx at level %d remaining size %llx\n", base, entry, level, size);
 				*entry = base | attr;
 				base += block_size;
 				size -= block_size;
@@ -197,7 +196,6 @@ static uint64_t xtables_virt_to_phys(uint64_t *pgd, uint64_t virt)
 	uint64_t entry = xtables_find_entry(pgd, virt);
 
 	entry &= 0x7FFFFFF000;
-//	entry << 11;
 
 	phys |= entry;
 
@@ -217,9 +215,6 @@ static int xtables_init(int size)
 	pgd = xtables_create_table(pgd);
 
 	xtables_map_region(pgd, TEST_START_RANGE, TEST_SIZE, PMD_TYPE_SECT | PMD_SECT_AF);
-
-
-	printf("virt: %llx, phys: %llx\n", virt, xtables_virt_to_phys(pgd, virt));
 
 	munmap(pgd, TLB_TABLE_SIZE);
 
