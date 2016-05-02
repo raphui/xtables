@@ -31,8 +31,8 @@
 #define TLB_TABLE_SIZE  0x40000000
 
 #define TEST_FILENAME		"va_mem"
-#define TEST_START_RANGE	0x400000000
-#define TEST_END_RANGE		0x500000000
+#define TEST_START_RANGE	0x000000000
+#define TEST_END_RANGE		0x100444000
 #define TEST_ATTR		MEMORY_ATTRIBUTES(MT_NORMAL)
 #define TEST_SIZE		TEST_END_RANGE - TEST_START_RANGE
 
@@ -46,6 +46,32 @@
 #define BLOCK_SIZE_L2   0x200000
 #define BLOCK_SIZE_L3   0x1000
 
+#define VA_START                   0x0
+#define BITS_PER_VA                33
+/* Granule size of 4KB is being used */
+#define GRANULE_SIZE_SHIFT         12
+#define GRANULE_SIZE               (1 << GRANULE_SIZE_SHIFT)
+#define XLAT_ADDR_MASK             ((1UL << BITS_PER_VA) - GRANULE_SIZE)
+#define GRANULE_SIZE_MASK          ((1 << GRANULE_SIZE_SHIFT) - 1)
+
+#define BITS_RESOLVED_PER_LVL   (GRANULE_SIZE_SHIFT - 3)
+#define L1_ADDR_SHIFT           (GRANULE_SIZE_SHIFT + BITS_RESOLVED_PER_LVL * 2)
+#define L2_ADDR_SHIFT           (GRANULE_SIZE_SHIFT + BITS_RESOLVED_PER_LVL * 1)
+#define L3_ADDR_SHIFT           (GRANULE_SIZE_SHIFT + BITS_RESOLVED_PER_LVL * 0)
+
+
+#define L1_ADDR_MASK     (((1UL << BITS_RESOLVED_PER_LVL) - 1) << L1_ADDR_SHIFT)
+#define L2_ADDR_MASK     (((1UL << BITS_RESOLVED_PER_LVL) - 1) << L2_ADDR_SHIFT)
+#define L3_ADDR_MASK     (((1UL << BITS_RESOLVED_PER_LVL) - 1) << L3_ADDR_SHIFT)
+
+/* These macros give the size of the region addressed by each entry of a xlat
+   table at any given level */
+#define L3_XLAT_SIZE               (1UL << L3_ADDR_SHIFT)
+#define L2_XLAT_SIZE               (1UL << L2_ADDR_SHIFT)
+#define L1_XLAT_SIZE               (1UL << L1_ADDR_SHIFT)
+
+#define IS_ALIGNED(x,a)         (((x) & ((__typeof__(x))(a)-1UL)) == 0)
+
 static uint64_t *pgd;
 static uint64_t *pmd;
 static uint64_t *pte;
@@ -58,6 +84,16 @@ static int level2shift(int level)
 {
 	/* Page is 12 bits wide, every level translates 9 bits */
 	return (12 + 9 * (3 - level));
+}
+
+static uint64_t level2mask(int level)
+{
+	if (level == 1)
+		return L1_ADDR_MASK;
+	else if (level == 2)
+		return L2_ADDR_MASK;
+	else if (level == 3)
+		return L3_ADDR_MASK;
 }
 
 static int entry_type(uint64_t *entry)
@@ -97,29 +133,24 @@ static uint64_t *xtables_create_table(uint64_t *pgd)
 	return new_table;
 }
 
-static uint64_t *xtables_find_entry(uint64_t *pgd, uint64_t addr, int level)
+static uint64_t *xtables_find_entry(uint64_t *pgd, uint64_t addr)
 {
 	uint64_t *entry = pgd;
 	uint64_t block_shift;
 	int i;
 	int idx;
 
-	for (i = 0; i < 4; i++) {
+	for (i = 1; i < 4; i++) {
 		block_shift = level2shift(i);
 		idx = (addr >> block_shift) & 0x1FF;
 		entry += idx;
 
 		printf("idx=%llx PTE %p at level %d: %llx\n", idx, entry, i, *entry);
 
-		if (i == level)
+		if ((entry_type(entry) != PMD_TYPE_TABLE) || (block_shift <= GRANULE_SIZE_SHIFT))
 			break;
-
-		if (entry_type(entry) != PMD_TYPE_TABLE) {
-			entry = NULL;
-			break;
-		}
 		else
-			entry = (uint64_t *)(*entry & 0x0000fffffffff000ULL);	
+			entry = (uint64_t *)(*entry & XLAT_ADDR_MASK);	
 	}
 
 
@@ -129,24 +160,23 @@ static uint64_t *xtables_find_entry(uint64_t *pgd, uint64_t addr, int level)
 static void xtables_map_region(uint64_t *pgd, uint64_t base, uint64_t size, uint64_t attr)
 {
 	uint64_t block_size;
+	uint64_t block_shift;
 	uint64_t *entry;
+	uint64_t idx;
 	uint64_t *table;
 	int level;
 
-	while (size) {
-		entry = xtables_find_entry(pgd, base, 0);
-		if (entry && (entry_type(entry) == PMD_TYPE_FAULT)) {
-			table = xtables_create_table(pgd);
-			xtables_set_table(entry, table);
-		}
+	table = pgd;
 
+	while (size) {
 		for (level = 1; level < 4; level++) {
-			entry = xtables_find_entry(pgd, base, level);
+			idx = (base & level2mask(level)) >> level2shift(level);
 			block_size = (1 << level2shift(level));
 
-			if (size >= block_size && !(base & (block_size - 1))) {
-				printf("entry: %llx\n", entry);
-				virt = entry;
+			if (size >= block_size && IS_ALIGNED(base, block_size)) {
+				entry = table + idx;
+				if (level == 3)
+					virt = entry;
 				*entry = base | attr;
 				base += block_size;
 				size -= block_size;
@@ -164,11 +194,12 @@ static void xtables_map_region(uint64_t *pgd, uint64_t base, uint64_t size, uint
 static uint64_t xtables_virt_to_phys(uint64_t *pgd, uint64_t virt)
 {
 	uint64_t phys = virt & 0xFFF;
-	uint64_t entry_lvl3 = xtables_find_entry(pgd, virt, 3);
+	uint64_t entry = xtables_find_entry(pgd, virt);
 
-	entry_lvl3 << 11;
+	entry &= 0x7FFFFFF000;
+//	entry << 11;
 
-	phys |= entry_lvl3;
+	phys |= entry;
 
 	return phys;
 }
