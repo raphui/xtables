@@ -61,6 +61,7 @@
 #define PMD_TYPE_FAULT		(0 << 0)
 #define PMD_TYPE_TABLE		(3 << 0)
 #define PMD_TYPE_SECT		(1 << 0)
+#define PMD_TYPE_PAGE		(1 << 0)
 
 /*
  * Section

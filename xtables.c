@@ -73,8 +73,7 @@
 #define IS_ALIGNED(x,a)         (((x) & ((__typeof__(x))(a)-1UL)) == 0)
 
 static uint64_t *pgd;
-static uint64_t *pmd;
-static uint64_t *pte;
+static int free_idx;	
 
 static uint64_t virt;
 
@@ -96,7 +95,7 @@ static uint64_t level2mask(int level)
 		return L3_ADDR_MASK;
 }
 
-static int entry_type(uint64_t *entry)
+static int pte_type(uint64_t *entry)
 {
 	return *entry & PMD_TYPE_MASK;
 }
@@ -119,81 +118,101 @@ static void xtables_set_table(uint64_t *pt, uint64_t *table_addr)
 	*pt = val;
 }
 
-static uint64_t *xtables_create_table(uint64_t *pgd)
+static uint64_t *xtables_create_table(void)
 {
-	uint64_t *new_table = pgd;
-	uint64_t pt_len = MAX_ENTRIES * sizeof(uint64_t);
-
-	/* Allocate MAX_ENTRIES pte entries */
-	pgd += pt_len;
+	uint64_t *new_table = pgd + free_idx * GRANULE_SIZE;
 
 	/* Mark all entries as invalid */
-	memset(new_table, 0, pt_len);
+	memset(new_table, 0, GRANULE_SIZE);
+
+	free_idx++;
 
 	return new_table;
 }
 
-static uint64_t *xtables_find_entry(uint64_t *pgd, uint64_t addr)
+static uint64_t xtables_get_level_table(uint64_t *pte)
 {
-	uint64_t *entry = pgd;
+	uint64_t *table = (uint64_t *)(*pte & XLAT_ADDR_MASK);
+
+	if (pte_type(pte) != PMD_TYPE_TABLE) {
+		table = xtables_create_table();
+		xtables_set_table(pte, table);
+	}
+
+	return table;
+}
+
+static uint64_t *xtables_find_entry(uint64_t addr)
+{
+	uint64_t *pte;
 	uint64_t block_shift;
+	uint64_t idx;
 	int i;
-	int idx;
+
+	pte = pgd;
 
 	for (i = 1; i < 4; i++) {
 		block_shift = level2shift(i);
-		idx = (addr >> block_shift) & 0x1FF;
-		entry += idx;
+		idx = (addr & level2mask(i)) >> block_shift;
+		pte += idx;
 
-		printf("idx=%llx PTE %p at level %d: %llx\n", idx, entry, i, *entry);
-
-		if ((entry_type(entry) != PMD_TYPE_TABLE) || (block_shift <= GRANULE_SIZE_SHIFT))
+		if ((pte_type(pte) != PMD_TYPE_TABLE) || (block_shift <= GRANULE_SIZE_SHIFT))
 			break;
 		else
-			entry = (uint64_t *)(*entry & XLAT_ADDR_MASK);	
+			pte = (uint64_t *)(*pte & XLAT_ADDR_MASK);
 	}
 
+	printf("virt: %llx at idx=%d PTE %p at level %d: %llx\n", addr, idx, pte, i, *pte);
 
-	return entry;
+	return pte;
 }
 
-static void xtables_map_region(uint64_t *pgd, uint64_t base, uint64_t size, uint64_t attr)
+static void xtables_map_region(uint64_t virt, uint64_t phys, uint64_t size, uint64_t attr)
 {
 	uint64_t block_size;
 	uint64_t block_shift;
-	uint64_t *entry;
+	uint64_t *pte;
 	uint64_t idx;
+	uint64_t addr;
 	uint64_t *table;
 	int level;
 
-	table = pgd;
+	addr = virt;
+
+	attr &= ~(PMD_TYPE_SECT);
 
 	while (size) {
+		table = pgd;
 		for (level = 1; level < 4; level++) {
-			idx = (base & level2mask(level)) >> level2shift(level);
-			block_size = (1 << level2shift(level));
+			block_shift = level2shift(level);
+			idx = (addr & level2mask(level)) >> block_shift;
+			block_size = (1 << block_shift);
 
-			if (size >= block_size && IS_ALIGNED(base, block_size)) {
-				entry = table + idx;
-				printf("base at %llx pte at %llx at level %d remaining size %llx\n", base, entry, level, size);
-				*entry = base | attr;
-				base += block_size;
+			pte = table + idx;
+
+			if (level == 3)
+				attr |= PMD_TYPE_PAGE;
+			else
+				attr |= PMD_TYPE_SECT;
+
+			if (size >= block_size && IS_ALIGNED(addr, block_size)) {
+				*pte = addr | attr;
+				printf("virt at %llx pte at %llx [%llx] at level %d with idx %d remaining size %llx\n", addr, pte, *pte, level, idx, size);
+				addr += block_size;
 				size -= block_size;
 				break;
 
-			} else if (entry_type(entry) == PMD_TYPE_FAULT) {
-				table = xtables_create_table(pgd);
-				xtables_set_table(entry, table);
 			}
+
+			table = xtables_get_level_table(pte);
 		}
 
 	}
 }
-
 static uint64_t xtables_virt_to_phys(uint64_t *pgd, uint64_t virt)
 {
 	uint64_t phys = virt & 0xFFF;
-	uint64_t entry = xtables_find_entry(pgd, virt);
+	uint64_t entry = xtables_find_entry(virt);
 
 	entry &= 0x7FFFFFF000;
 
@@ -212,7 +231,8 @@ static int xtables_init(int size)
 		return -ENOMEM;
 	}
 
-	pgd = xtables_create_table(pgd);
+	memset(pgd, 0, GRANULE_SIZE);
+	free_idx = 1;
 
 	xtables_map_region(pgd, TEST_START_RANGE, TEST_SIZE, PMD_TYPE_SECT | PMD_SECT_AF);
 
